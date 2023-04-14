@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'chat_gpt_provider.dart';
+import 'chat_scroll_controller.dart';
+import 'package:elegant_notification/elegant_notification.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -206,7 +208,7 @@ class _ListTileWithHoverState extends State<ListTileWithHover> {
 class _MyHomePageState extends State<MyHomePage> with WindowListener {
   final TextEditingController _textEditingController = TextEditingController();
   final TextEditingController _apiKeyController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
+  final ChatScrollController _scrollController = ChatScrollController();
 
   @override
   void initState() {
@@ -233,10 +235,32 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   }
 
   void _createNewConversation(BuildContext context) {
+    if (Provider.of<ChatGptProvider>(context, listen: false).loading) return;
+
     final chatGptProvider =
         Provider.of<ChatGptProvider>(context, listen: false);
     chatGptProvider.saveCurrentConversation();
     chatGptProvider.createNewConversation();
+  }
+
+  void _displayStatistics() {
+    final chatGptProvider =
+        Provider.of<ChatGptProvider>(context, listen: false);
+
+    chatGptProvider.getConversationStatistics().then((value) {
+      var tokenCount = value.tokenCount;
+      var truncated = value.truncatedMessageCount;
+      ElegantNotification.info(
+        title: const Text("Tokens"),
+        description: truncated < 1
+            ? Text("Your conversation is using $tokenCount tokens per call.")
+            : Text(
+                "You have reached the max tokens, the $truncated oldest messages have been truncated."),
+        background: Theme.of(context).primaryColor,
+        displayCloseButton: false,
+        width: 50,
+      ).show(context);
+    });
   }
 
   void _submitMessage(BuildContext context) async {
@@ -284,7 +308,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           );
         },
       );
-
+      _displayStatistics();
       _scrollToBottom();
     }
   }
@@ -372,7 +396,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   }
 
   void _scrollToBottom() {
-    _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    _scrollController.controller
+        .jumpTo(_scrollController.controller.position.maxScrollExtent);
   }
 
   ListTileWithHover _buildConversationTile(
@@ -437,13 +462,13 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                   children: [
                     Expanded(
                       child: SingleChildScrollView(
-                        controller: _scrollController,
+                        controller: _scrollController.controller,
                         // Vertical scroll for messages
                         child: Column(
                           children: chatGptProvider.messages
                               .map((message) => Column(children: [
                                     Container(
-                                        color: message.isUser
+                                        color: message.role == "user"
                                             ? Theme.of(context)
                                                 .colorScheme
                                                 .background
@@ -462,7 +487,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                                                 crossAxisAlignment:
                                                     CrossAxisAlignment.start,
                                                 children: [
-                                                  (message.isUser
+                                                  (message.role == "user"
                                                       ? const Icon(Icons.person,
                                                           size: 32)
                                                       : const Icon(
@@ -495,10 +520,18 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                       children: [
                         Expanded(
                           child: TextField(
+                            decoration: InputDecoration(
+                                filled: true, //<-- SEE HERE
+                                fillColor: Theme.of(context)
+                                    .colorScheme
+                                    .shadow
+                                    .withOpacity(0.4),
+                                hintText: 'Type your message'),
                             keyboardType: TextInputType.text,
                             textInputAction: TextInputAction.none,
                             maxLines: 5,
                             minLines: 1,
+                            style: fontStyle,
                             controller: _textEditingController,
                             onSubmitted: (val) => {
                               if (!RawKeyboard.instance.keysPressed
@@ -515,9 +548,6 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                                               .text.length))
                                 }
                             },
-                            decoration: const InputDecoration(
-                                hintText: 'Type your message'),
-                            style: fontStyle,
                           ),
                         ),
                         if (chatGptProvider.loading)

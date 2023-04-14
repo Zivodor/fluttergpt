@@ -3,8 +3,10 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:fluttergpt/chat_scroll_controller.dart';
 import 'package:uuid/uuid.dart';
-import 'package:http/http.dart' as http;
+import 'package:dart_openai/openai.dart';
+import 'package:flutter_gpt_tokenizer/flutter_gpt_tokenizer.dart';
 
 class ChatGptProvider with ChangeNotifier {
   String? apiKey;
@@ -19,16 +21,17 @@ class ChatGptProvider with ChangeNotifier {
 
   ChatGptProvider(this.appDocumentDir) {
     _loadSettings().then((settings) {
-      apiKey = settings['apiKey'];
-      fontSize = settings['fontSize'].toDouble();
+      setApiKey(settings['apiKey']);
+      setFontSize(settings['fontSize'].toDouble());
       isDarkMode = settings['isDarkMode'];
-      model = settings['model'];
+      setModel(settings['model']);
       notifyListeners();
     });
   }
 
   void loadConversations() async {
-    final directory = Directory('${appDocumentDir.path}/conversations');
+    final directory =
+        Directory('${appDocumentDir.path}/FlutterGPT/conversations');
     if (!await directory.exists()) {
       await directory.create();
     }
@@ -61,13 +64,15 @@ class ChatGptProvider with ChangeNotifier {
     if (activeConversation == null) return;
 
     final fileName = '${activeConversation?.id}.json';
-    final file = File('${appDocumentDir.path}/conversations/$fileName');
+    final file =
+        File('${appDocumentDir.path}/FlutterGPT/conversations/$fileName');
     final fileContent = jsonEncode(activeConversation?.toJson());
     await file.writeAsString(fileContent);
   }
 
   Future<void> deleteConversation(String id) async {
-    final file = File('${appDocumentDir.path}\\conversations\\$id.json');
+    final file =
+        File('${appDocumentDir.path}\\FlutterGPT\\conversations\\$id.json');
 
     if (await file.exists()) await file.delete();
     conversations.removeWhere((conversation) => conversation.id == id);
@@ -78,17 +83,20 @@ class ChatGptProvider with ChangeNotifier {
   void saveCurrentConversationSync() {
     if (activeConversation == null) return;
     final fileName = '${activeConversation?.id}.json';
-    final file = File('${appDocumentDir.path}/conversations/$fileName');
+    final file =
+        File('${appDocumentDir.path}/FlutterGPT/conversations/$fileName');
     final fileContent = jsonEncode(activeConversation?.toJson());
     file.writeAsStringSync(fileContent);
   }
 
-  void setActiveConversation(int index) {
+  Future<void> setActiveConversation(int index) async {
     if (index < 0 || index > conversations.length - 1) return;
 
     activeConversation = conversations[index];
     messages = activeConversation!.messages;
     notifyListeners();
+    await Future.delayed(const Duration(milliseconds: 50));
+    scrollToBottomAnimated();
   }
 
   void createNewConversation() {
@@ -104,6 +112,7 @@ class ChatGptProvider with ChangeNotifier {
   void setApiKey(String key) {
     apiKey = key;
     _saveSettings();
+    if (apiKey != null) OpenAI.apiKey = apiKey!;
     notifyListeners();
   }
 
@@ -115,7 +124,8 @@ class ChatGptProvider with ChangeNotifier {
 
   // Load settings from disk
   Future<Map<String, dynamic>> _loadSettings() async {
-    final settingsFile = File('${appDocumentDir.path}/settings.json');
+    final settingsFile =
+        File('${appDocumentDir.path}/FlutterGPT/settings.json');
     if (await settingsFile.exists()) {
       final jsonString = await settingsFile.readAsString();
       return jsonDecode(jsonString) as Map<String, dynamic>;
@@ -130,7 +140,8 @@ class ChatGptProvider with ChangeNotifier {
 
   // Save settings to disk
   Future<void> _saveSettings() async {
-    final settingsFile = File('${appDocumentDir.path}/settings.json');
+    final settingsFile =
+        File('${appDocumentDir.path}/FlutterGPT/settings.json');
     final settings = {
       'apiKey': apiKey,
       'isDarkMode': isDarkMode,
@@ -152,68 +163,111 @@ class ChatGptProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  Future<ConversationStatistics> getConversationStatistics() async {
+    num tokenEstimation = 0;
+    int maxTokens = model == "gpt-4" ? 8192 : 4096;
+    int count = 0;
+
+    for (var i = messages.length - 1; i >= 0; i--) {
+      var message = messages[i];
+      tokenEstimation +=
+          await Tokenizer().count(message.content, modelName: model!);
+      if (tokenEstimation > maxTokens && count > 0) break;
+
+      count++;
+    }
+
+    return ConversationStatistics(
+        tokenCount: tokenEstimation as int,
+        truncatedMessageCount: messages.length - count);
+  }
+
   Future<void> sendMessage(BuildContext context, String messageContent,
       {required void Function(String) onError}) async {
     loading = true;
 
     if (activeConversation == null) createNewConversation();
 
-    messages.add(Message(content: messageContent, isUser: true));
+    messages.add(Message(content: messageContent, role: "user"));
     notifyListeners();
 
-    // Define API request headers
-    final headers = {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer $apiKey',
-    };
+    List<OpenAIChatCompletionChoiceMessageModel> request = [];
 
-    // Prepare the API call body with the conversation history
-    final requestBody = {
-      'model': model,
-      'messages': messages
-          .map((message) => {
-                'role': message.isUser ? 'user' : 'assistant',
-                'content': message.content
-              })
-          .toList(),
-    };
+    num tokenEstimation = 0;
+    int maxTokens = model == "gpt-4" ? 8192 : 4096;
 
-    // Make API call
-    final response = await http.post(
-      Uri.parse('https://api.openai.com/v1/chat/completions'),
-      body: jsonEncode(requestBody),
-      headers: headers,
-    );
+    for (var i = messages.length - 1; i >= 0; i--) {
+      var message = messages[i];
+      tokenEstimation +=
+          await Tokenizer().count(message.content, modelName: model!);
+      if (tokenEstimation > maxTokens && request.isNotEmpty) break;
 
-    if (response.statusCode == 200) {
-      // Parse ChatGPT response and add it to the messages list
-      final responseData = jsonDecode(response.body) as Map<String, dynamic>;
-      messages.add(Message(
-          content: responseData['choices'][0]['message']['content'],
-          isUser: false));
-    } else {
-      // Call the onError callback with the error message
-      onError('Error: ${response.statusCode}');
+      request.add(OpenAIChatCompletionChoiceMessageModel(
+          role: message.role == "user"
+              ? OpenAIChatMessageRole.user
+              : OpenAIChatMessageRole.assistant,
+          content: message.content));
     }
 
-    loading = false;
+    request = request.reversed.toList();
+
+    Stream<OpenAIStreamChatCompletionModel> chatStream =
+        OpenAI.instance.chat.createStream(
+      model: "gpt-3.5-turbo",
+      messages: request,
+    );
+    var buffer = StringBuffer();
+    messages.add(Message(content: buffer.toString(), role: "assistant"));
+
+    chatStream.listen(
+        (chatStreamEvent) {
+          if (chatStreamEvent.choices[0].delta.content == "null" ||
+              chatStreamEvent.choices[0].delta.content == null) return;
+          buffer.write(chatStreamEvent.choices[0].delta.content);
+          messages.last.content = buffer.toString();
+          notifyListeners();
+          scrollToBottom();
+        },
+        onDone: () {
+          loading = false;
+          notifyListeners();
+        },
+        cancelOnError: true,
+        onError: (err) {
+          loading = false;
+          onError('Error: $err');
+          notifyListeners();
+        });
+
     notifyListeners();
+    scrollToBottom();
+  }
+
+  scrollToBottom() {
+    var controller = ChatScrollController().controller;
+    controller.jumpTo(controller.position.maxScrollExtent);
+  }
+
+  scrollToBottomAnimated() {
+    var controller = ChatScrollController().controller;
+    controller.animateTo(controller.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 500), curve: Curves.decelerate);
   }
 }
 
 class Message {
-  final String content;
-  final bool isUser;
+  String content;
+  final String role;
 
-  Message({required this.content, required this.isUser});
+  Message({required this.content, required this.role});
 
   Message.fromJson(Map<String, dynamic> json)
       : content = json['content'],
-        isUser = json['isUser'];
+        role = json['role'];
 
   Map<String, dynamic> toJson() => {
         'content': content,
-        'isUser': isUser,
+        'role': role,
       };
 }
 
@@ -250,4 +304,12 @@ class Conversation {
       'messages': messages.map((message) => message.toJson()).toList(),
     };
   }
+}
+
+class ConversationStatistics {
+  final int tokenCount;
+  final int truncatedMessageCount;
+
+  ConversationStatistics(
+      {required this.tokenCount, required this.truncatedMessageCount});
 }

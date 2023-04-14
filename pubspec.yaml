@@ -35,6 +35,9 @@ dependencies:
   path_provider: ^2.0.14
   uuid: ^3.0.6
   window_manager: ^0.3.2
+  dart_openai: ^1.9.1
+  flutter_gpt_tokenizer: ^0.1.0
+  elegant_notification: ^1.8.1
 
 
   # The following adds the Cupertino Icons font to your application.
