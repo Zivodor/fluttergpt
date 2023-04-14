@@ -213,7 +213,7 @@ class ChatGptProvider with ChangeNotifier {
 
     Stream<OpenAIStreamChatCompletionModel> chatStream =
         OpenAI.instance.chat.createStream(
-      model: "gpt-3.5-turbo",
+      model: model!,
       messages: request,
     );
     var buffer = StringBuffer();

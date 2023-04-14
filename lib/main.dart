@@ -198,6 +198,28 @@ class _ListTileWithHoverState extends State<ListTileWithHover> {
                 Provider.of<ChatGptProvider>(context, listen: false);
             if (!chatGptProvider.loading) {
               chatGptProvider.saveCurrentConversation();
+
+              if (chatGptProvider.activeConversation == widget.conversation) {
+                chatGptProvider.getConversationStatistics().then((stats) {
+                  showDialog(
+                      context: context,
+                      builder: (context) {
+                        return AlertDialog(
+                          title: Text('${widget.conversation.name} Statistics'),
+                          content: Text(
+                              'Tokens: ${stats.tokenCount}\nTruncated Messages: ${stats.truncatedMessageCount}'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Close'),
+                            ),
+                          ],
+                        );
+                      });
+                  return;
+                });
+              }
+
               chatGptProvider.setActiveConversation(widget.index);
             }
           },
