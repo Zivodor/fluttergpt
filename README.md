@@ -14,3 +14,5 @@ I have no intention of managing this project, I just wanted a ChatGPT like inter
 - Font Size control
 - Single message conversations
 - System messages
+- Conversation token metrics
+- Automated context trimming
