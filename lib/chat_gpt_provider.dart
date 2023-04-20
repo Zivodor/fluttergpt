@@ -208,13 +208,13 @@ class ChatGptProvider with ChangeNotifier {
 
     if (activeConversation == null) createNewConversation();
 
-    if (activeConversation!.useSystemMessage && messages.isNotEmpty) {
-      messages.add(Message(content: messageContent, role: "user"));
-    } else {
+    if (activeConversation!.useSystemMessage && messages.isEmpty) {
       messages.add(Message(content: messageContent, role: "system"));
       loading = false;
       notifyListeners();
       return;
+    } else {
+      messages.add(Message(content: messageContent, role: "user"));
     }
     notifyListeners();
 
