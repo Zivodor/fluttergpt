@@ -70,6 +70,15 @@ class ChatGptProvider with ChangeNotifier {
     await file.writeAsString(fileContent);
   }
 
+    for (var conversation in conversations) {
+      final fileName = '${conversation.id}.json';
+      final file =
+          File('${appDocumentDir.path}/FlutterGPT/conversations/$fileName');
+      final fileContent = jsonEncode(conversation.toJson());
+      file.writeAsStringSync(fileContent);
+    }
+  }
+
   Future<void> deleteConversation(String id) async {
     final file =
         File('${appDocumentDir.path}\\FlutterGPT\\conversations\\$id.json');
@@ -175,6 +184,16 @@ class ChatGptProvider with ChangeNotifier {
       if (tokenEstimation > maxTokens && count > 0) break;
 
       count++;
+
+      if (!activeConversation!.includeContext) {
+        if (activeConversation!.useSystemMessage && messages.length > 1) {
+          message = messages[0];
+          tokenEstimation +=
+              await Tokenizer().count(message.content, modelName: model!);
+        }
+        count = messages.length;
+        break;
+      }
     }
 
     return ConversationStatistics(
@@ -188,7 +207,14 @@ class ChatGptProvider with ChangeNotifier {
 
     if (activeConversation == null) createNewConversation();
 
-    messages.add(Message(content: messageContent, role: "user"));
+    if (activeConversation!.useSystemMessage && messages.isNotEmpty) {
+      messages.add(Message(content: messageContent, role: "user"));
+    } else {
+      messages.add(Message(content: messageContent, role: "system"));
+      loading = false;
+      notifyListeners();
+      return;
+    }
     notifyListeners();
 
     List<OpenAIChatCompletionChoiceMessageModel> request = [];
@@ -196,20 +222,43 @@ class ChatGptProvider with ChangeNotifier {
     num tokenEstimation = 0;
     int maxTokens = model == "gpt-4" ? 8192 : 4096;
 
-    for (var i = messages.length - 1; i >= 0; i--) {
-      var message = messages[i];
-      tokenEstimation +=
-          await Tokenizer().count(message.content, modelName: model!);
-      if (tokenEstimation > maxTokens && request.isNotEmpty) break;
+    if (!activeConversation!.includeContext) {
+      if (activeConversation!.useSystemMessage) {
+        request.add(OpenAIChatCompletionChoiceMessageModel(
+            role: OpenAIChatMessageRole.system,
+            content: messages.first.content));
+
+        if (messages.length == 1) return;
+      }
 
       request.add(OpenAIChatCompletionChoiceMessageModel(
-          role: message.role == "user"
-              ? OpenAIChatMessageRole.user
-              : OpenAIChatMessageRole.assistant,
-          content: message.content));
+          role: OpenAIChatMessageRole.user, content: messages.last.content));
+    } else {
+      for (var i = messages.length - 1; i >= 0; i--) {
+        var message = messages[i];
+        tokenEstimation +=
+            await Tokenizer().count(message.content, modelName: model!);
+        if (tokenEstimation > maxTokens && request.isNotEmpty) break;
+
+        OpenAIChatMessageRole role = message.role == "user"
+            ? OpenAIChatMessageRole.user
+            : OpenAIChatMessageRole.assistant;
+
+        if (activeConversation!.useSystemMessage && i == 0) {
+          role = OpenAIChatMessageRole.system;
+        }
+
+        request.add(OpenAIChatCompletionChoiceMessageModel(
+            role: role, content: message.content));
+      }
+
+      request = request.reversed.toList();
     }
 
-    request = request.reversed.toList();
+    if (request.length == 1 && activeConversation!.useSystemMessage) {
+      loading = false;
+      return;
+    }
 
     Stream<OpenAIStreamChatCompletionModel> chatStream =
         OpenAI.instance.chat.createStream(
@@ -274,6 +323,8 @@ class Message {
 class Conversation {
   String id;
   String name;
+  bool includeContext = true;
+  bool useSystemMessage = false;
   DateTime createdDate;
   List<Message> messages;
 
@@ -293,6 +344,15 @@ class Conversation {
           .map((messageJson) => Message.fromJson(messageJson))
           .toList(),
     );
+
+    if (json.containsKey('includeContext')) {
+      conv.includeContext = json['includeContext'] as bool;
+    }
+
+    if (json.containsKey('useSystemMessage')) {
+      conv.useSystemMessage = json['useSystemMessage'] as bool;
+    }
+
     return conv;
   }
 
@@ -300,6 +360,8 @@ class Conversation {
     return {
       'id': id,
       'name': name,
+      'includeContext': includeContext,
+      'useSystemMessage': useSystemMessage,
       'createdDate': createdDate.toIso8601String(),
       'messages': messages.map((message) => message.toJson()).toList(),
     };

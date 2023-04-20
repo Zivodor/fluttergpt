@@ -49,15 +49,14 @@ class ListTileWithHover extends StatefulWidget {
   final ChatGptProvider provider;
   final Conversation conversation;
   final int index;
-  TextEditingController? controller;
+  final TextEditingController controller;
 
-  ListTileWithHover(
+  const ListTileWithHover(
       {super.key,
       required this.provider,
       required this.index,
-      required this.conversation}) {
-    controller = TextEditingController(text: conversation.name);
-  }
+      required this.conversation,
+      required this.controller});
 
   @override
   State<ListTileWithHover> createState() => _ListTileWithHoverState();
@@ -66,6 +65,52 @@ class ListTileWithHover extends StatefulWidget {
 class _ListTileWithHoverState extends State<ListTileWithHover> {
   bool _highlight = false;
   bool _editing = false;
+
+  void _showConversationSettings(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Settings'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SwitchListTile(
+                      title: const Text('Include Context'),
+                      value: widget.conversation.includeContext,
+                      onChanged: (bool value) {
+                        setState(() {
+                          widget.conversation.includeContext = value;
+                        });
+                      },
+                    ),
+                    SwitchListTile(
+                      title: const Text('First Message is System'),
+                      value: widget.conversation.useSystemMessage,
+                      onChanged: (bool value) {
+                        setState(() {
+                          widget.conversation.useSystemMessage = value;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -77,7 +122,29 @@ class _ListTileWithHoverState extends State<ListTileWithHover> {
               _highlight = false;
             }),
         child: ListTile(
-          leading: const Icon(Icons.message),
+          leading: SizedBox(
+              height: 50,
+              width: 75,
+              child: Row(
+                children: [
+                  Visibility(
+                      visible: !_highlight || _editing,
+                      child: const Icon(Icons.message)),
+                  Visibility(
+                    visible: _highlight && !_editing,
+                    child: IconButton(
+                      splashRadius: 20,
+                      icon: const Icon(
+                        Icons.settings,
+                        color: Colors.grey,
+                      ),
+                      onPressed: () async {
+                        _showConversationSettings(context);
+                      },
+                    ),
+                  )
+                ],
+              )),
           title: Column(
             children: [
               Visibility(
@@ -99,15 +166,15 @@ class _ListTileWithHoverState extends State<ListTileWithHover> {
                   onEditingComplete: () {
                     setState(() {
                       _editing = false;
-                      if (widget.controller == null) return;
-                      widget.conversation.name = widget.controller!.text;
+                      widget.conversation.name = widget.controller.text;
+                      FocusScope.of(context).unfocus();
                     });
                   },
                   onTapOutside: (event) {
                     setState(() {
                       _editing = false;
-                      if (widget.controller == null) return;
-                      widget.conversation.name = widget.controller!.text;
+                      widget.conversation.name = widget.controller.text;
+                      FocusScope.of(context).unfocus();
                     });
                   },
                 ),
@@ -145,8 +212,7 @@ class _ListTileWithHoverState extends State<ListTileWithHover> {
                       onPressed: () async {
                         setState(() {
                           _editing = false;
-                          if (widget.controller == null) return;
-                          widget.conversation.name = widget.controller!.text;
+                          widget.conversation.name = widget.controller.text;
                         });
                       },
                     ),
@@ -231,10 +297,14 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   final TextEditingController _textEditingController = TextEditingController();
   final TextEditingController _apiKeyController = TextEditingController();
   final ChatScrollController _scrollController = ChatScrollController();
+  final ScrollController _textScrollController = ScrollController();
+
+  bool _wasShiftKeyPressed = false;
 
   @override
   void initState() {
     windowManager.addListener(this);
+    _textEditingController.addListener((_onTextEditingControllerChanged));
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
       final chatGptProvider =
@@ -248,7 +318,22 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   @override
   void dispose() {
     windowManager.removeListener(this);
+    _textEditingController.removeListener(_onTextEditingControllerChanged);
+    _textEditingController.dispose();
+    _apiKeyController.dispose();
+    _textScrollController.dispose();
+    _scrollController.controller.dispose();
     super.dispose();
+  }
+
+  void _onTextEditingControllerChanged() {
+    if (_wasShiftKeyPressed) {
+      _textScrollController
+          .jumpTo(_textScrollController.position.maxScrollExtent);
+    }
+    setState(() {
+      _wasShiftKeyPressed = false;
+    });
   }
 
   @override
@@ -414,7 +499,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   void _saveConversationsOnClose() {
     final chatGptProvider =
         Provider.of<ChatGptProvider>(context, listen: false);
-    chatGptProvider.saveCurrentConversationSync();
+    chatGptProvider.saveAllConversationsSync();
   }
 
   void _scrollToBottom() {
@@ -425,7 +510,11 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   ListTileWithHover _buildConversationTile(
       ChatGptProvider provider, int index, Conversation conversation) {
     return ListTileWithHover(
-        provider: provider, index: index, conversation: conversation);
+      provider: provider,
+      index: index,
+      conversation: conversation,
+      controller: TextEditingController(text: conversation.name),
+    );
   }
 
   @override
@@ -439,41 +528,42 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         appBar: AppBar(title: const Text('ChatGPT Desktop')),
         body: Row(
           children: [
-            Expanded(
-              child: Container(
-                  color: Theme.of(context).colorScheme.shadow.withOpacity(0.2),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: ListView.builder(
-                          itemCount: chatGptProvider.conversations.length,
-                          itemBuilder: (context, index) {
-                            final conversation =
-                                chatGptProvider.conversations[index];
-                            return _buildConversationTile(
-                                chatGptProvider, index, conversation);
-                          },
+            SizedBox(
+                width: 300,
+                child: Container(
+                    color:
+                        Theme.of(context).colorScheme.shadow.withOpacity(0.2),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: ListView.builder(
+                            itemCount: chatGptProvider.conversations.length,
+                            itemBuilder: (context, index) {
+                              final conversation =
+                                  chatGptProvider.conversations[index];
+                              return _buildConversationTile(
+                                  chatGptProvider, index, conversation);
+                            },
+                          ),
                         ),
-                      ),
-                      const Divider(),
-                      ListTile(
-                        contentPadding:
-                            const EdgeInsets.symmetric(horizontal: 10.0),
-                        leading: const Icon(Icons.add),
-                        title: const Text('New Conversation'),
-                        onTap: () => _createNewConversation(context),
-                      ),
-                      ListTile(
-                        contentPadding:
-                            const EdgeInsets.symmetric(horizontal: 10.0),
-                        leading: const Icon(Icons.settings),
-                        title: const Text('Settings'),
-                        onTap: () => _showSettings(context),
-                      ),
-                    ],
-                  )),
-            ),
+                        const Divider(),
+                        ListTile(
+                          contentPadding:
+                              const EdgeInsets.symmetric(horizontal: 10.0),
+                          leading: const Icon(Icons.add),
+                          title: const Text('New Conversation'),
+                          onTap: () => _createNewConversation(context),
+                        ),
+                        ListTile(
+                          contentPadding:
+                              const EdgeInsets.symmetric(horizontal: 10.0),
+                          leading: const Icon(Icons.settings),
+                          title: const Text('Settings'),
+                          onTap: () => _showSettings(context),
+                        ),
+                      ],
+                    ))),
             const VerticalDivider(),
             Expanded(
               flex: 3,
@@ -512,9 +602,14 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                                                   (message.role == "user"
                                                       ? const Icon(Icons.person,
                                                           size: 32)
-                                                      : const Icon(
-                                                          Icons.android,
-                                                          size: 32)),
+                                                      : message.role ==
+                                                              "assistant"
+                                                          ? const Icon(
+                                                              Icons.android,
+                                                              size: 32)
+                                                          : const Icon(
+                                                              Icons.computer,
+                                                              size: 32)),
                                                   const SizedBox(width: 8),
                                                   Expanded(
                                                     // Wrap with expanded to give constraints
@@ -565,9 +660,9 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                                 {
                                   _textEditingController.text += "\n",
                                   _textEditingController.selection =
-                                      TextSelection.fromPosition(TextPosition(
+                                      TextSelection.collapsed(
                                           offset: _textEditingController
-                                              .text.length))
+                                              .text.length)
                                 }
                             },
                           ),
