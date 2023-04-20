@@ -70,6 +70,7 @@ class ChatGptProvider with ChangeNotifier {
     await file.writeAsString(fileContent);
   }
 
+  void saveAllConversationsSync() {
     for (var conversation in conversations) {
       final fileName = '${conversation.id}.json';
       final file =
